@@ -447,7 +447,7 @@ static int __ar7240sw_reg_wait(struct mii_bus *mii, u32 reg, u32 mask, u32 val,
 		if ((t & mask) == val)
 			return 0;
 
-		usleep_range(1000, 2000);
+		msleep(1);
 	}
 
 	return -ETIMEDOUT;
@@ -563,29 +563,6 @@ static void ar7240sw_disable_port(struct ar7240sw *as, unsigned port)
 			   AR7240_PORT_CTRL_STATE_DISABLED);
 }
 
-
-u32 ar7240_disable_switch_port(struct mii_bus *mii, unsigned port)
-{
-	u32 port_ctrl;
-	port_ctrl = ar7240sw_reg_read(mii,AR7240_REG_PORT_CTRL(port));
-	ar7240sw_reg_write(mii, AR7240_REG_PORT_CTRL(port),
-			   AR7240_PORT_CTRL_STATE_DISABLED);
-
-//	pr_info("%s, %s, %d ------------------->\n", __FILE__, __FUNCTION__, __LINE__);
-
-	return port_ctrl;
-}
-
-void ar7240_enable_switch_port(struct mii_bus *mii, unsigned port, u32 val)
-{
-	ar7240sw_reg_write(mii, AR7240_REG_PORT_CTRL(port),
-			   val);
-
-//	pr_info("%s, %s, %d ------------------->\n", __FILE__, __FUNCTION__, __LINE__);
-
-}
-
-
 static void ar7240sw_setup(struct ar7240sw *as)
 {
 	struct mii_bus *mii = as->mii_bus;
@@ -643,31 +620,6 @@ static void ar7240sw_setup(struct ar7240sw *as)
 	ar7240sw_reg_rmw(mii, AR7240_REG_SERVICE_TAG, AR7240_SERVICE_TAG_M, 0);
 }
 
-/* inspired by phy_poll_reset in drivers/net/phy/phy_device.c */
-static int
-ar7240sw_phy_poll_reset(struct mii_bus *bus)
-{
-	const unsigned int sleep_msecs = 20;
-	int ret, elapsed, i;
-
-	for (elapsed = sleep_msecs; elapsed <= 600;
-	     elapsed += sleep_msecs) {
-		msleep(sleep_msecs);
-		for (i = 0; i < AR7240_NUM_PHYS; i++) {
-			ret = ar7240sw_phy_read(bus, i, MII_BMCR);
-			if (ret < 0)
-				return ret;
-			if (ret & BMCR_RESET)
-				break;
-			if (i == AR7240_NUM_PHYS - 1) {
-				usleep_range(1000, 2000);
-				return 0;
-			}
-		}
-	}
-	return -ETIMEDOUT;
-}
-
 static int ar7240sw_reset(struct ar7240sw *as)
 {
 	struct mii_bus *mii = as->mii_bus;
@@ -679,7 +631,7 @@ static int ar7240sw_reset(struct ar7240sw *as)
 		ar7240sw_disable_port(as, i);
 
 	/* Wait for transmit queues to drain. */
-	usleep_range(2000, 3000);
+	msleep(2);
 
 	/* Reset the switch. */
 	ar7240sw_reg_write(mii, AR7240_REG_MASK_CTRL,
@@ -696,9 +648,7 @@ static int ar7240sw_reset(struct ar7240sw *as)
 		ar7240sw_phy_write(mii, i, MII_BMCR,
 				   BMCR_RESET | BMCR_ANENABLE);
 	}
-	ret = ar7240sw_phy_poll_reset(mii);
-	if (ret)
-		return ret;
+	msleep(1000);
 
 	ar7240sw_setup(as);
 	return ret;
