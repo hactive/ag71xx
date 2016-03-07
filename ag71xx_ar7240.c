@@ -18,6 +18,8 @@
 #include <linux/switch.h>
 #include "ag71xx.h"
 
+extern void ar9344_gpio_led_eth_set(int,int);
+
 #define BITM(_count)	(BIT(_count) - 1)
 #define BITS(_shift, _count)	(BITM(_count) << _shift)
 
@@ -445,7 +447,7 @@ static int __ar7240sw_reg_wait(struct mii_bus *mii, u32 reg, u32 mask, u32 val,
 		if ((t & mask) == val)
 			return 0;
 
-		msleep(1);
+		usleep_range(1000, 2000);
 	}
 
 	return -ETIMEDOUT;
@@ -618,6 +620,31 @@ static void ar7240sw_setup(struct ar7240sw *as)
 	ar7240sw_reg_rmw(mii, AR7240_REG_SERVICE_TAG, AR7240_SERVICE_TAG_M, 0);
 }
 
+/* inspired by phy_poll_reset in drivers/net/phy/phy_device.c */
+static int
+ar7240sw_phy_poll_reset(struct mii_bus *bus)
+{
+	const unsigned int sleep_msecs = 20;
+	int ret, elapsed, i;
+
+	for (elapsed = sleep_msecs; elapsed <= 600;
+	     elapsed += sleep_msecs) {
+		msleep(sleep_msecs);
+		for (i = 0; i < AR7240_NUM_PHYS; i++) {
+			ret = ar7240sw_phy_read(bus, i, MII_BMCR);
+			if (ret < 0)
+				return ret;
+			if (ret & BMCR_RESET)
+				break;
+			if (i == AR7240_NUM_PHYS - 1) {
+				usleep_range(1000, 2000);
+				return 0;
+			}
+		}
+	}
+	return -ETIMEDOUT;
+}
+
 static int ar7240sw_reset(struct ar7240sw *as)
 {
 	struct mii_bus *mii = as->mii_bus;
@@ -629,7 +656,7 @@ static int ar7240sw_reset(struct ar7240sw *as)
 		ar7240sw_disable_port(as, i);
 
 	/* Wait for transmit queues to drain. */
-	msleep(2);
+	usleep_range(2000, 3000);
 
 	/* Reset the switch. */
 	ar7240sw_reg_write(mii, AR7240_REG_MASK_CTRL,
@@ -646,7 +673,9 @@ static int ar7240sw_reset(struct ar7240sw *as)
 		ar7240sw_phy_write(mii, i, MII_BMCR,
 				   BMCR_RESET | BMCR_ANENABLE);
 	}
-	msleep(1000);
+	ret = ar7240sw_phy_poll_reset(mii);
+	if (ret)
+		return ret;
 
 	ar7240sw_setup(as);
 	return ret;
@@ -1034,6 +1063,8 @@ static const struct switch_dev_ops ar7240_ops = {
 	.get_port_stats = ar7240_get_port_stats,
 };
 
+static u16 ar7240_port_linkstatus[AR7240_NUM_PHYS] = { 0 };
+
 static struct ar7240sw *ar7240_probe(struct ag71xx *ag)
 {
 	struct ag71xx_platform_data *pdata = ag71xx_get_pdata(ag);
@@ -1127,6 +1158,7 @@ static void link_function(struct work_struct *work) {
 	u8 mask;
 	int i;
 	int status = 0;
+	u16 ls = 0;
 
 	mask = ~as->swdata->phy_poll_mask;
 	for (i = 0; i < AR7240_NUM_PHYS; i++) {
@@ -1139,6 +1171,24 @@ static void link_function(struct work_struct *work) {
 		if (link & BMSR_LSTATUS) {
 			status = 1;
 			break;
+		}
+	}
+
+	for (i = 0; i < AR7240_NUM_PHYS; i++) {
+		ls = ar7240sw_phy_read(ag->mii_bus, i, MII_BMSR);
+		if( ls != ar7240_port_linkstatus[i] )
+		{
+			ar7240_port_linkstatus[i] = ls;
+			if( ls & BMSR_LSTATUS )
+			{
+				printk("%s: port.%d UP\n",__func__,i);
+				ar9344_gpio_led_eth_set(i,1);
+			}
+			else
+			{
+				printk("%s: port.%d DOWN\n",__func__,i);
+				ar9344_gpio_led_eth_set(i,0);
+			}
 		}
 	}
 
