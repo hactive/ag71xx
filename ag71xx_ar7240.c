@@ -563,6 +563,29 @@ static void ar7240sw_disable_port(struct ar7240sw *as, unsigned port)
 			   AR7240_PORT_CTRL_STATE_DISABLED);
 }
 
+
+u32 ar7240_disable_switch_port(struct mii_bus *mii, unsigned port)
+{
+	u32 port_ctrl;
+	port_ctrl = ar7240sw_reg_read(mii,AR7240_REG_PORT_CTRL(port));
+	ar7240sw_reg_write(mii, AR7240_REG_PORT_CTRL(port),
+			   AR7240_PORT_CTRL_STATE_DISABLED);
+
+//	pr_info("%s, %s, %d ------------------->\n", __FILE__, __FUNCTION__, __LINE__);
+
+	return port_ctrl;
+}
+
+void ar7240_enable_switch_port(struct mii_bus *mii, unsigned port, u32 val)
+{
+	ar7240sw_reg_write(mii, AR7240_REG_PORT_CTRL(port),
+			   val);
+
+//	pr_info("%s, %s, %d ------------------->\n", __FILE__, __FUNCTION__, __LINE__);
+
+}
+
+
 static void ar7240sw_setup(struct ar7240sw *as)
 {
 	struct mii_bus *mii = as->mii_bus;

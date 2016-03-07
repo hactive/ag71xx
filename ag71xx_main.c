@@ -887,15 +887,33 @@ static void ag71xx_tx_timeout(struct net_device *dev)
 	schedule_work(&ag->restart_work);
 }
 
+extern u32 ar7240_disable_switch_port(struct mii_bus *mii, unsigned port);
+extern void ar7240_enable_switch_port(struct mii_bus *mii, unsigned port, u32 val);
+
 static void ag71xx_restart_work_func(struct work_struct *work)
 {
 	struct ag71xx *ag = container_of(work, struct ag71xx, restart_work);
+	u32 port_ctrl[5];
+	struct ag71xx_platform_data *pdata = ag71xx_get_pdata(ag);
+	int i;
 
 	rtnl_lock();
+	
+	if(pdata->is_ar724x){
+		for(i=0; i<5; i++)
+			port_ctrl[i] = ar7240_disable_switch_port(ag->mii_bus, i);
+	}
+	
 	ag71xx_hw_disable(ag);
 	ag71xx_hw_enable(ag);
 	if (ag->link)
 		__ag71xx_link_adjust(ag, false);
+
+	if(pdata->is_ar724x){
+		for(i=0; i<5; i++)
+			ar7240_enable_switch_port(ag->mii_bus, i, port_ctrl[i]);
+	}
+	
 	rtnl_unlock();
 }
 
@@ -911,7 +929,7 @@ static bool ag71xx_check_dma_stuck(struct ag71xx *ag, unsigned long timestamp)
 
 	rx_sm = ag71xx_rr(ag, AG71XX_REG_RX_SM);
 	if ((rx_sm & 0x7) == 0x3 && ((rx_sm >> 4) & 0x7) == 0x6){
-		pr_info("%s, %s, %d ------------------->\n", __FILE__, __FUNCTION__, __LINE__);
+	//	pr_info("%s, %s, %d ------------------->\n", __FILE__, __FUNCTION__, __LINE__);
 		return true;
 	}
 
@@ -919,7 +937,7 @@ static bool ag71xx_check_dma_stuck(struct ag71xx *ag, unsigned long timestamp)
 	rx_fd = ag71xx_rr(ag, AG71XX_REG_FIFO_DEPTH);
 	if (((tx_sm >> 4) & 0x7) == 0 && ((rx_sm & 0x7) == 0) &&
 	    ((rx_sm >> 4) & 0x7) == 0 && rx_fd == 0){
-	    pr_info("%s, %s, %d ------------------->\n", __FILE__, __FUNCTION__, __LINE__);
+	   // pr_info("%s, %s, %d ------------------->\n", __FILE__, __FUNCTION__, __LINE__);
 		return true;
 	}
 
