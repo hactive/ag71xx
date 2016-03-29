@@ -176,30 +176,33 @@ static ssize_t read_file_ring(struct file *file, char __user *user_buf,
 			"Idx ... %-8s %-8s %-8s %-8s . %-10s\n",
 			"desc", "next", "data", "ctrl", "timestamp");
 
-	spin_lock_irqsave(&ag->lock, flags);
+	/* 因为新老驱动的结构定义不太一样 */
+	if(!board_use_ag71xx_cc){
+		spin_lock_irqsave(&ag->lock, flags);
 
-	curr = (ring->curr % ring->size);
-	dirty = (ring->dirty % ring->size);
-	desc_hw = ag71xx_rr(ag, desc_reg);
-	for (i = 0; i < ring->size; i++) {
-		struct ag71xx_buf *ab = &ring->buf[i];
-		u32 desc_dma = ((u32) ring->descs_dma) + i * ring->desc_size;
+		curr = (ring->curr % ring->size);
+		dirty = (ring->dirty % ring->size);
+		desc_hw = ag71xx_rr(ag, desc_reg);
+		for (i = 0; i < ring->size; i++) {
+			struct ag71xx_buf *ab = &ring->buf[i];
+			u32 desc_dma = ((u32) ring->descs_dma) + i * ring->desc_size;
 
-		len += snprintf(buf + len, buflen - len,
-			"%3d %c%c%c %08x %08x %08x %08x %c %10lu\n",
-			i,
-			(i == curr) ? 'C' : ' ',
-			(i == dirty) ? 'D' : ' ',
-			(desc_hw == desc_dma) ? 'H' : ' ',
-			desc_dma,
-			ab->desc->next,
-			ab->desc->data,
-			ab->desc->ctrl,
-			(ab->desc->ctrl & DESC_EMPTY) ? 'E' : '*',
-			ab->timestamp);
+			len += snprintf(buf + len, buflen - len,
+				"%3d %c%c%c %08x %08x %08x %08x %c %10lu\n",
+				i,
+				(i == curr) ? 'C' : ' ',
+				(i == dirty) ? 'D' : ' ',
+				(desc_hw == desc_dma) ? 'H' : ' ',
+				desc_dma,
+				ab->desc->next,
+				ab->desc->data,
+				ab->desc->ctrl,
+				(ab->desc->ctrl & DESC_EMPTY) ? 'E' : '*',
+				ab->timestamp);
+		}
+
+		spin_unlock_irqrestore(&ag->lock, flags);
 	}
-
-	spin_unlock_irqrestore(&ag->lock, flags);
 
 	ret = simple_read_from_buffer(user_buf, count, ppos, buf, len);
 	kfree(buf);

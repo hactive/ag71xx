@@ -447,7 +447,7 @@ static int __ar7240sw_reg_wait(struct mii_bus *mii, u32 reg, u32 mask, u32 val,
 		if ((t & mask) == val)
 			return 0;
 
-		msleep(1);
+		usleep_range(1000, 2000);
 	}
 
 	return -ETIMEDOUT;
@@ -563,6 +563,34 @@ static void ar7240sw_disable_port(struct ar7240sw *as, unsigned port)
 			   AR7240_PORT_CTRL_STATE_DISABLED);
 }
 
+static u32 ar7240_port_ctrl[AR7240_NUM_PHYS];
+
+void ar7240_disable_switch_port(struct mii_bus *mii)
+{	
+	int i;
+
+	for (i = 0; i < AR7240_NUM_PHYS; i++) {
+		ar7240_port_ctrl[i] = ar7240sw_reg_read(mii,AR7240_REG_PORT_CTRL(i));	
+		ar7240sw_reg_write(mii, AR7240_REG_PORT_CTRL(i),	AR7240_PORT_CTRL_STATE_DISABLED);
+	}
+	
+	/* Wait for transmit queues to drain. */
+	mdelay(5);
+}
+
+void ar7240_enable_switch_port(struct mii_bus *mii)
+{
+	int i;
+
+	for (i = 0; i < AR7240_NUM_PHYS; i++)
+		ar7240sw_reg_write(mii, AR7240_REG_PORT_CTRL(i),	ar7240_port_ctrl[i]);
+
+	mdelay(5);
+}
+
+
+
+ 
 static void ar7240sw_setup(struct ar7240sw *as)
 {
 	struct mii_bus *mii = as->mii_bus;
@@ -620,6 +648,31 @@ static void ar7240sw_setup(struct ar7240sw *as)
 	ar7240sw_reg_rmw(mii, AR7240_REG_SERVICE_TAG, AR7240_SERVICE_TAG_M, 0);
 }
 
+/* inspired by phy_poll_reset in drivers/net/phy/phy_device.c */
+static int
+ar7240sw_phy_poll_reset(struct mii_bus *bus)
+{
+	const unsigned int sleep_msecs = 20;
+	int ret, elapsed, i;
+
+	for (elapsed = sleep_msecs; elapsed <= 600;
+	     elapsed += sleep_msecs) {
+		msleep(sleep_msecs);
+		for (i = 0; i < AR7240_NUM_PHYS; i++) {
+			ret = ar7240sw_phy_read(bus, i, MII_BMCR);
+			if (ret < 0)
+				return ret;
+			if (ret & BMCR_RESET)
+				break;
+			if (i == AR7240_NUM_PHYS - 1) {
+				usleep_range(1000, 2000);
+				return 0;
+			}
+		}
+	}
+	return -ETIMEDOUT;
+}
+
 static int ar7240sw_reset(struct ar7240sw *as)
 {
 	struct mii_bus *mii = as->mii_bus;
@@ -631,7 +684,7 @@ static int ar7240sw_reset(struct ar7240sw *as)
 		ar7240sw_disable_port(as, i);
 
 	/* Wait for transmit queues to drain. */
-	msleep(2);
+	usleep_range(2000, 3000);
 
 	/* Reset the switch. */
 	ar7240sw_reg_write(mii, AR7240_REG_MASK_CTRL,
@@ -648,7 +701,9 @@ static int ar7240sw_reset(struct ar7240sw *as)
 		ar7240sw_phy_write(mii, i, MII_BMCR,
 				   BMCR_RESET | BMCR_ANENABLE);
 	}
-	msleep(1000);
+	ret = ar7240sw_phy_poll_reset(mii);
+	if (ret)
+		return ret;
 
 	ar7240sw_setup(as);
 	return ret;
@@ -1189,6 +1244,24 @@ void ag71xx_ar7240_start(struct ag71xx *ag)
 
 	schedule_delayed_work(&ag->link_work, HZ / 10);
 }
+
+void ar7240_start_switch_port(struct ag71xx *ag)
+{
+	struct ar7240sw *as = ag->phy_priv;
+
+	ar7240_disable_switch_port(ag->mii_bus);
+
+	ar7240_enable_switch_port(ag->mii_bus);
+
+	ag->speed = SPEED_1000;
+	ag->duplex = 1;
+
+	ar7240_set_addr(as, ag->dev->dev_addr);
+	ar7240_hw_apply(&as->swdev);
+
+	schedule_delayed_work(&ag->link_work, HZ / 10);
+}
+
 
 void ag71xx_ar7240_stop(struct ag71xx *ag)
 {

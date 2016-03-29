@@ -92,6 +92,7 @@ struct ag71xx_buf {
 		struct sk_buff	*skb;
 		void		*rx_buf;
 	};
+	struct ag71xx_desc	*desc;
 	union {
 		dma_addr_t	dma_addr;
 		unsigned long	timestamp;
@@ -177,6 +178,9 @@ struct ag71xx {
 	struct work_struct	restart_work;
 	struct delayed_work	link_work;
 	struct timer_list	oom_timer;
+
+	struct delayed_work	check_work;
+	unsigned long	xmit_timestamp;
 
 #ifdef CONFIG_AG71XX_DEBUG_FS
 	struct ag71xx_debug	debug;
