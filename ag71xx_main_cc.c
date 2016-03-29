@@ -1058,6 +1058,7 @@ static void ag71xx_rx_check_dst_mac(struct ag71xx *ag, u8 *buf)
 		printk("error mac addr find!\n");
 		for(i=0; i<24; i++)
 			printk("%02x ", buf[i]);
+		printk("\n");
 	/*	
 		printk("\n dev addr %02x:%02x:%02x:%02x:%02x:%02x\n", 
 			dev->dev_addr[0],
