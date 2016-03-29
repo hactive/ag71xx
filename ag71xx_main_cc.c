@@ -932,9 +932,6 @@ static void ag71xx_check_work_func(struct work_struct *work)
 
 extern u32 ar7240_disable_switch_port(struct mii_bus *mii);
 extern void ar7240_enable_switch_port(struct mii_bus *mii);
-extern void ag71xx_ar7240_start(struct ag71xx *ag);
-extern void ar7240_start_switch_port(struct ag71xx *ag);
-extern void ag71xx_ar7240_stop(struct ag71xx *ag);
 
 static void ag71xx_restart_work_func(struct work_struct *work)
 {
@@ -1046,11 +1043,13 @@ static void ag71xx_rx_check_dst_mac(struct ag71xx *ag, u8 *buf)
 	struct net_device *dev = ag->dev;
 	u8 pair_match_num = 0, err_broad_mac = 0;
 
+/*
 	for(i=0; i<5; i+=2){
 		if( *(u16 *)(buf+i) == *(u16 *)(dev->dev_addr+i))
 			pair_match_num++;
 	}
-
+*/
+	/* 只判断广播报文出错的情况 */
 	if( (*(u16 *)buf == 0xffff)
 		&& (*(u32 *)(buf + 2) != 0xffffffff))
 		err_broad_mac = 1;
@@ -1059,6 +1058,7 @@ static void ag71xx_rx_check_dst_mac(struct ag71xx *ag, u8 *buf)
 		printk("error mac addr find!\n");
 		for(i=0; i<24; i++)
 			printk("%02x ", buf[i]);
+	/*	
 		printk("\n dev addr %02x:%02x:%02x:%02x:%02x:%02x\n", 
 			dev->dev_addr[0],
 			dev->dev_addr[1],
@@ -1066,6 +1066,7 @@ static void ag71xx_rx_check_dst_mac(struct ag71xx *ag, u8 *buf)
 			dev->dev_addr[3],
 			dev->dev_addr[4],
 			dev->dev_addr[5]);
+       */			
 		schedule_work(&ag->restart_work);
 	}
 
@@ -1079,7 +1080,6 @@ static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 	unsigned int pktlen_mask = ag->desc_pktlen_mask;
 	int done = 0;
 	unsigned char * buf;
-	u16 pkt_proto;
 
 	DBG("%s: rx packets, limit=%d, curr=%u, dirty=%u\n",
 			dev->name, limit, ring->curr, ring->dirty);
@@ -1130,10 +1130,6 @@ static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 			skb->ip_summed = CHECKSUM_NONE;
 			skb->protocol = eth_type_trans(skb, dev);
 			buf = skb_mac_header(skb);
-			if(skb->protocol == 0x8100)
-				pkt_proto = *(u16 *)(buf + 16);
-			else
-				pkt_proto = skb->protocol;
 
 			ag71xx_rx_check_dst_mac(ag, buf);
 

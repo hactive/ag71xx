@@ -1245,22 +1245,6 @@ void ag71xx_ar7240_start(struct ag71xx *ag)
 	schedule_delayed_work(&ag->link_work, HZ / 10);
 }
 
-void ar7240_start_switch_port(struct ag71xx *ag)
-{
-	struct ar7240sw *as = ag->phy_priv;
-
-	ar7240_disable_switch_port(ag->mii_bus);
-
-	ar7240_enable_switch_port(ag->mii_bus);
-
-	ag->speed = SPEED_1000;
-	ag->duplex = 1;
-
-	ar7240_set_addr(as, ag->dev->dev_addr);
-	ar7240_hw_apply(&as->swdev);
-
-	schedule_delayed_work(&ag->link_work, HZ / 10);
-}
 
 
 void ag71xx_ar7240_stop(struct ag71xx *ag)
