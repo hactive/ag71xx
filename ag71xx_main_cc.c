@@ -507,31 +507,41 @@ static void ag71xx_fast_reset(struct ag71xx *ag)
 
 	ag71xx_hw_stop(ag);
 	wmb();
+	pdata->ddr_flush();
+//	memset(dram_exception_record_addr + 4 * (512 * (sizeof(unsigned long)/4)), 0xff, 0x10000);
 
 	mii_reg = ag71xx_rr(ag, AG71XX_REG_MII_CFG);
 	rx_ds = ag71xx_rr(ag, AG71XX_REG_RX_DESC);
 
 	ath79_device_reset_set(reset_mask);
-	udelay(10);
+	mdelay(100);
 	ath79_device_reset_clear(reset_mask);
-	udelay(10);
+	mdelay(200);
 
-	ag71xx_dma_reset(ag);
 	ag71xx_hw_setup(ag);
-	ag71xx_tx_packets(ag, true);
-	ag->tx_ring.curr = 0;
-	ag->tx_ring.dirty = 0;
-	netdev_reset_queue(ag->dev);
+	ag71xx_dma_reset(ag);
+	udelay(100);
 
 	/* setup max frame length */
 	ag71xx_wr(ag, AG71XX_REG_MAC_MFL,
 		  ag71xx_max_frame_len(ag->dev->mtu));
 
 	ag71xx_wr(ag, AG71XX_REG_RX_DESC, rx_ds);
-	ag71xx_wr(ag, AG71XX_REG_TX_DESC, ag->tx_ring.descs_dma);
 	ag71xx_wr(ag, AG71XX_REG_MII_CFG, mii_reg);
 
 	ag71xx_hw_set_macaddr(ag, dev->dev_addr);
+
+	pdata->ddr_flush();
+	ag71xx_tx_packets(ag, true);
+	ag->tx_ring.curr = 0;
+	ag->tx_ring.dirty = 0;
+	wmb();	
+	pdata->ddr_flush();
+	netdev_reset_queue(ag->dev);
+
+
+	ag71xx_wr(ag, AG71XX_REG_TX_DESC, ag->tx_ring.descs_dma);
+
 }
 
 static void ag71xx_hw_start(struct ag71xx *ag)
@@ -799,6 +809,7 @@ static netdev_tx_t ag71xx_hard_start_xmit(struct sk_buff *skb,
 	ring->buf[i].timestamp = jiffies;
 
 	netdev_sent_queue(dev, skb->len);
+	ag->xmit_timestamp = jiffies;
 
 	desc->ctrl &= ~DESC_EMPTY;
 	ring->curr += n;
@@ -810,7 +821,7 @@ static netdev_tx_t ag71xx_hard_start_xmit(struct sk_buff *skb,
 	if (ring->desc_split)
 	    ring_min *= AG71XX_TX_RING_DS_PER_PKT;
 
-	if (ring->curr - ring->dirty >= ring->size - ring_min) {
+	if ((ring->curr - ring->dirty) >= (ring->size - ring_min)) {
 		DBG("%s: tx queue full\n", dev->name);
 		netif_stop_queue(dev);
 	}
@@ -892,15 +903,59 @@ static void ag71xx_tx_timeout(struct net_device *dev)
 	schedule_work(&ag->restart_work);
 }
 
+static void ag71xx_check_work_func(struct work_struct *work)
+{
+	struct ag71xx *ag = container_of(work, struct ag71xx, check_work.work);
+	struct ag71xx_platform_data *pdata = ag71xx_get_pdata(ag);
+
+	if(ag->xmit_timestamp == 0){
+		schedule_delayed_work(&ag->check_work, HZ);
+		return;
+	}
+
+	pdata->ddr_flush();
+#if 0
+	if (pdata->is_ar724x &&
+		ag71xx_check_dma_stuck(ag, ag->xmit_timestamp)){
+		printk("DMA STUCK %s, %s, %d\n", __FILE__, __FUNCTION__, __LINE__);
+		schedule_work(&ag->restart_work);
+	}
+
+	wmb();
+#else
+	ag71xx_tx_packets(ag, false);
+#endif
+	schedule_delayed_work(&ag->check_work, HZ);
+
+}
+
+
+extern u32 ar7240_disable_switch_port(struct mii_bus *mii);
+extern void ar7240_enable_switch_port(struct mii_bus *mii);
+extern void ag71xx_ar7240_start(struct ag71xx *ag);
+extern void ar7240_start_switch_port(struct ag71xx *ag);
+extern void ag71xx_ar7240_stop(struct ag71xx *ag);
+
 static void ag71xx_restart_work_func(struct work_struct *work)
 {
 	struct ag71xx *ag = container_of(work, struct ag71xx, restart_work);
 
+	printk("%s: find dma stuck!\n", __FUNCTION__);
+
 	rtnl_lock();
+	ag->dev->stats.tx_carrier_errors++;
+
+	ar7240_disable_switch_port(ag->mii_bus);
+	ag71xx_ar7240_stop(ag);
+
 	ag71xx_hw_disable(ag);
 	ag71xx_hw_enable(ag);
+	
 	if (ag->link)
 		__ag71xx_link_adjust(ag, false);
+
+	ar7240_enable_switch_port(ag->mii_bus);
+
 	rtnl_unlock();
 }
 
@@ -985,6 +1040,37 @@ static int ag71xx_tx_packets(struct ag71xx *ag, bool flush)
 	return sent;
 }
 
+static void ag71xx_rx_check_dst_mac(struct ag71xx *ag, u8 *buf)
+{
+	int i;
+	struct net_device *dev = ag->dev;
+	u8 pair_match_num = 0, err_broad_mac = 0;
+
+	for(i=0; i<5; i+=2){
+		if( *(u16 *)(buf+i) == *(u16 *)(dev->dev_addr+i))
+			pair_match_num++;
+	}
+
+	if( (*(u16 *)buf == 0xffff)
+		&& (*(u32 *)(buf + 2) != 0xffffffff))
+		err_broad_mac = 1;
+
+	if(pair_match_num==2 || err_broad_mac){
+		printk("error mac addr find!\n");
+		for(i=0; i<24; i++)
+			printk("%02x ", buf[i]);
+		printk("\n dev addr %02x:%02x:%02x:%02x:%02x:%02x\n", 
+			dev->dev_addr[0],
+			dev->dev_addr[1],
+			dev->dev_addr[2],
+			dev->dev_addr[3],
+			dev->dev_addr[4],
+			dev->dev_addr[5]);
+		schedule_work(&ag->restart_work);
+	}
+
+}
+
 static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 {
 	struct net_device *dev = ag->dev;
@@ -992,6 +1078,8 @@ static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 	int offset = ag71xx_buffer_offset(ag);
 	unsigned int pktlen_mask = ag->desc_pktlen_mask;
 	int done = 0;
+	unsigned char * buf;
+	u16 pkt_proto;
 
 	DBG("%s: rx packets, limit=%d, curr=%u, dirty=%u\n",
 			dev->name, limit, ring->curr, ring->dirty);
@@ -1041,6 +1129,14 @@ static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 			skb->dev = dev;
 			skb->ip_summed = CHECKSUM_NONE;
 			skb->protocol = eth_type_trans(skb, dev);
+			buf = skb_mac_header(skb);
+			if(skb->protocol == 0x8100)
+				pkt_proto = *(u16 *)(buf + 16);
+			else
+				pkt_proto = skb->protocol;
+
+			ag71xx_rx_check_dst_mac(ag, buf);
+
 			netif_receive_skb(skb);
 		}
 
@@ -1292,6 +1388,8 @@ static int ag71xx_cc_probe(struct platform_device *pdev)
 	dev->ethtool_ops = &ag71xx_ethtool_ops;
 
 	INIT_WORK(&ag->restart_work, ag71xx_restart_work_func);
+	INIT_DELAYED_WORK(&ag->check_work, ag71xx_check_work_func);
+	schedule_delayed_work(&ag->check_work, HZ*2);
 
 	init_timer(&ag->oom_timer);
 	ag->oom_timer.data = (unsigned long) dev;
